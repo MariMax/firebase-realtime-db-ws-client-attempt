@@ -1,0 +1,118 @@
+body {
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.container {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background-image: linear-gradient(#e66465, #9198e5);
+}
+
+.svg {
+  display: flex;
+  justify-content: center;
+}
+
+.buttons {
+  position: absolute;
+  display: flex;
+  align-items: stretch;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.buttons > * {
+  flex: 1;
+  background: transparent;
+  cursor: pointer;
+  border: none;
+
+}
+
+svg {
+  min-width: 100%;
+  height: 100vh;
+}
+
+circle,
+path {
+  stroke-width: 10;
+  fill: none;
+  stroke: rgba(255, 255, 255, .4)
+}
+
+.raf {
+  stroke: yellow;
+}
+.raf-text{
+  font-size: 5px;
+  fill: gray;
+  transform: rotate(36deg) translate(31px, -143px);
+}
+
+.stl,
+.layout {
+  stroke: blue;
+}
+
+.stl-text,.layout-text, .painting-text {
+  font-size: 5px;
+  fill: white;
+}
+
+.painting {
+  stroke: lime;
+}
+
+.task {
+  stroke: orange;
+  transition: transform .1s linear;
+}
+
+.fill-left-top,
+.fill-left-bottom,
+.fill-right-top,
+.fill-right-bottom {
+  stroke-width: 0;
+  fill: rgba(255, 255, 255, .4);
+}
+
+.loop {
+  stroke-width: 0;
+  fill: rgba(255, 255, 255, 1);
+  position: relative;
+}
+
+.gate-right,
+.gate-left {
+  fill: none;
+  stroke-width: 1;
+  stroke: white;
+  transform-origin: 50% 50%;
+  transition: transform .1s linear
+}
+
+.gate-right {
+  transform: translate(-22px, -15px) rotate(35deg)
+}
+
+.gate-right.open {
+  transform: translate(0, 0) rotate(0deg)
+}
+
+.gate-left {
+  transform: translate(22px, 15px) rotate(35deg)
+}
+.gate-left.open {
+  transform: translate(0, 0) rotate(0deg)
+}
+.active {
+  transform: translateX(15px);
+}

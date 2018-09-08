@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <script>
+    class Deferred {
+      constructor() {
+        this._promise = new Promise((resolve, reject) => {
+          this._resolve = resolve;
+          this._reject = reject;
+        });
+      }
+
+      resolve(value) {
+        this._resolve(value);
+      }
+
+      reject(reason) {
+        this._reject(reason);
+      }
+
+      get promise() {
+        return this._promise;
+      }
+    }
+
+    class Subscription {
+      constructor(path, cb, unsubscribe, defer) {
+        this.path = path;
+        this.cb = cb;
+        this.status = 0;
+
+        this._unsubscribe = unsubscribe;
+
+        defer.promise
+          .then(() => this.status = 1)
+          .catch(() => this.status = -1);
+      }
+
+      unsubscribe() {
+        this._unsubscribe();
+      }
+    }
+
+    class ConnectionManager {
+      constructor(url) {
+        this._subscriptions = [];
+        this._helloMessage = '{"t":"d","d":{"r":1,"a":"s","b":{"c":{"sdk.js.5-4-1":1}}}}';
+        this._expectedHelloResponse = '{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}';
+        this._pingMessage = '{"t":"c","d":{"t":"p","d":{}}}';
+        this._expectedPongMessage = '{"t":"c","d":{"t":"o","d":null}}';
+        this._connectionEstablished = false;
+        this._messageNumber = 0;
+        this._url = url;
+        this._reconnectPeriod = 1000;
+        this._pingPeriod = 60000;
+        this._connectionAttempt = 0;
+        this._timeoutHandler = -1;
+        this._pingTimeoutHandler = -1;
+        this._pendingSubscriptions = [];
+        this._reconnect();
+      }
+
+      get connectionStatus() {
+        return this._connectionEstablished ? 1 : 0;
+      }
+
+      _bindEvents() {
+        this._ws.addEventListener('open', (ev) => this._onOpen(ev));
+        this._ws.addEventListener('message', (ev) => this._onMessage(ev));
+        this._ws.addEventListener('close', (ev) => this._onClose(ev));
+        this._ws.addEventListener('error', (ev) => this._onError(ev));
+      }
+
+      _onOpen(ev) {
+        console.log('open', ev);
+        this._messageNumber = 0;
+        clearTimeout(this._timeoutHandler);
+        this._resetPing();
+        this._resubscribe();
+      }
+
+      _onMessage(ev) {
+        this._messageNumber++;
+        console.log('message', ev);
+        this._handleMessage(ev.data);
+      }
+
+      _onClose(ev) {
+        console.log('close', ev);
+        this._reconnect();
+      }
+
+      _onError(ev) {
+        console.log('error', ev);
+        this._ws.close();
+      }
+
+      _resubscribe() {
+        //TODO: implement...
+      }
+
+      _reconnect() {
+        if (this._ws && (
+          this._ws.readyState === this._ws.OPEN ||
+          this._ws.readyState === this._ws.CONNECTING)) return;
+        this._connectionEstablished = false;
+        this._connectionAttempt++;
+        this._ws = new WebSocket(this._url);
+        this._bindEvents();
+        this._timeoutHandler = setTimeout(() => this._reconnect(), this._reconnectPeriod);
+      }
+
+      _resetPing() {
+        clearTimeout(this._pingTimeoutHandler);
+        this._pingTimeoutHandler = setTimeout(() => { this._ping(); this._resetPing() }, this._pingPeriod);
+      }
+      _ping() { this._ws.send(0) }
+
+      _removePendingSubscription(subscription) {
+        this._pendingSubscriptions = this._pendingSubscriptions.filter(i => i !== subscription);
+      }
+
+      _handleMessage(data) {
+        if (this._messageNumber === 1) { return this.send(this._helloMessage) }
+        if (this._expectedHelloResponse === data) { return this.send(this._pingMessage) }
+        if (this._expectedPongMessage === data) { return this._connectionEstablished = true }
+
+        const subscription = this._pendingSubscriptions.find(i => i.expectedResponse === data);
+        if (subscription) { 
+          subscription.defer.resolve(subscription.subscription); 
+          this._removePendingSubscription(subscription);
+          return 
+        }
+        if (data.includes(`{"t":"d","d":{"r":`)) {
+          const d = data.replace('{"t":"d","d":{"r":', '');
+          const messageId = parseInt(d, 10);
+          const failedSubscription = this._pendingSubscriptions.find(i => i.messageId === messageId);
+          if (failedSubscription) {
+            failedSubscription.defer.reject(data);
+            this._removePendingSubscription(failedSubscription);
+            return;
+          }
+        }
+
+        this._parseData(data);
+      }
+
+      _parseData(data) {
+        console.log(data);
+      }
+
+      send(data) {
+        this._ws.send(data);
+        this._resetPing();
+      }
+
+      subscribe(path, cb) {
+        const messageId = this._messageNumber++;
+        const subscribeMessage = `{"t":"d","d":{"r":${messageId},"a":"q","b":{"p":"${path}","h":""}}}`;
+        const expectedResponse = `{"t":"d","d":{"r":${messageId},"b":{"s":"ok","d":"{}"}}}`
+        const defer = new Deferred();
+        const subscription = new Subscription(
+          path,
+          cb,
+          () => this._subscriptions = this._subscriptions.filter(i => i !== subscription),
+          defer
+        );
+        this._subscriptions.push(subscription);
+        this._pendingSubscriptions.push({ messageId, defer, expectedResponse, subscription })
+        this.send(subscribeMessage);
+        return defer.promise;
+      }
+    }
+
+    const cm = new ConnectionManager('wss://<db-name>.firebaseio.com/.ws?v=5&ns=<db-name>');
+
+
+
+
+  </script>
+</head>
+
+<body>
+</body>
+
+</html>

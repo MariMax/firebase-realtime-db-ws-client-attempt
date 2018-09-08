@@ -1,0 +1,1 @@
+const socket = io.connect('wss://web-ar-e1c34.firebaseio.com/');
