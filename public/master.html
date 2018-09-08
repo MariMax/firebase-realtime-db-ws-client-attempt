@@ -74,9 +74,9 @@
       constructor(url) {
         this._messagesQueue = [];
         this._helloMessage = '{"t":"d","d":{"r":1,"a":"s","b":{"c":{"sdk.js.5-4-1":1}}}}';
-        this._expectedHelloResponse = '{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}';
+        this._expectedHelloResponse = { t: "d", d: { r: 1, b: { s: "ok", d: "" } } };
         this._pingMessage = '{"t":"c","d":{"t":"p","d":{}}}';
-        this._expectedPongMessage = '{"t":"c","d":{"t":"o","d":null}}';
+        this._expectedPongMessage = { t: "c", d: { t: "o", d: null } };
         this._connectionEstablished = false;
         this._messageNumber = 0;
         this._url = url;
@@ -143,17 +143,20 @@
         clearTimeout(this._pingTimeoutHandler);
         this._pingTimeoutHandler = setTimeout(() => { this._ping(); this._resetPing() }, this._pingPeriod);
       }
-      _ping() { this._ws.send(0) }
+      _ping() { if (this._ws.readyState !== this._ws.OPEN) { this._ws.send(0) } }
 
       _handleMessage(data) {
         if (this._messageNumber === 0) { this._messageNumber++; this.send(this._helloMessage) }
-        if (this._expectedHelloResponse === data) { return this.send(this._pingMessage) }
-        if (this._expectedPongMessage === data) { return this._connectionEstablished = true }
-
-        PubSub.emit({
-          topic: 'Message',
-          payload: data
-        });
+        if (this._expectedHelloResponse === JSON.parse(data)) { return this.send(this._pingMessage) }
+        if (this._expectedPongMessage === JSON.parse(data)) { return this._connectionEstablished = true }
+        const jsonMessage = JSON.parse(data);
+        if (jsonMessage.t === 'd') {
+          //data message
+          PubSub.emit({
+            topic: 'Message',
+            payload: jsonMessage.d
+          });
+        }
       }
 
       send(data) {
@@ -180,7 +183,16 @@
           case 'open': {
             this._resubscribe();
           }
+          default: {
+            // this is bad, ie, we have error or close events
+            // all subscriptions should go down
+            this._disableAllSubscriptions();
+          }
         }
+      }
+
+      _disableAllSubscriptions() {
+        this._subscriptions.forEach(i => i.state = -1);
       }
 
       _resubscribe() {
@@ -194,28 +206,79 @@
       }
 
       _onMessage(data) {
-        const subscription = this._pendingSubscriptions.find(i => i.expectedResponse === data);
-        if (subscription) {
-          subscription.defer.resolve(subscription.subscription);
-          this._removePendingSubscription(subscription);
-          return
-        }
-        if (/{"t":"d","d":{"r":\d/.test(data)) {
-          const d = data.replace('{"t":"d","d":{"r":', '');
-          const messageId = parseInt(d, 10);
-          const failedSubscription = this._pendingSubscriptions.find(i => i.messageId === messageId);
-          if (failedSubscription) {
-            failedSubscription.defer.reject(data);
-            this._removePendingSubscription(failedSubscription);
+        const requestNumber = data.r;
+        if (requestNumber) {
+          //this is response
+          const subscription = this._pendingSubscriptions.find(i => i.expectedResponse === data);
+          if (subscription) {
+            subscription.defer.resolve(subscription.subscription);
+            this._removePendingSubscription(subscription);
             return;
           }
         }
+        const error = data.error
+        if (error) {
+          //something went wrong, probably we send wrong request
+          return;
+        }
+        const action = data.a;
+        if (action) {
+          //this is an action, server trying to push something to us
+          //lets purse body and check what is it
+          this._onDataPush(action, data.b)
+        }
+      }
+
+      _onDataPush(action, body) {
+        //I think it will be a simple case, and I do value subscription, 
+        //so, I expect here only first case
+        //full changed tree by the path, so if there is something else
+        //I just consider it as an error
+        if (action === 'd')
+          this._notifySubscribersAboutDataChanges(
+            body[/*path*/ 'p'],
+            body[/*data*/ 'd'],
+          );
+        // else if (action === 'm')
+        //   this.onDataUpdate_(
+        //     body[/*path*/ 'p'],
+        //     body[/*data*/ 'd'],
+        // /*isMerge=*/ true,
+        //     body['t']
+        //   );
+        else if (action === 'c')
+          this._onListenRevoked(body[/*path*/ 'p'], body[/*query*/ 'q']);
+        // else if (action === 'ac') { }
+        // // this.onAuthRevoked_(
+        // //   body[/*status code*/ 's'],
+        // //   body[/* explanation */ 'd']
+        // // );
+        // else if (action === 'sd') { }// this.onSecurityDebugPacket_(body);
+        else { }
+        // error(
+        //   'Unrecognized action received from server: ' +
+        //   stringify(action) +
+        //   '\nAre you using the latest client?'
+        // );
+      }
+
+      _notifySubscribersAboutDataChanges(path, data) {
+        this._subscriptions.forEach(i => {
+          if (i.path === path && i.cb) {
+            i.cb(data);
+          }
+        })
+      }
+
+      _onListenRevoked(pathString, query) {
+        // TODO: remove subscriber, ping listener
       }
 
       subscribe(path, cb) {
+        path = path.replace(/(^\/+|\/+$ | ^\\+|\\+$)/g, '');
         const messageId = this._messageId++;
         const subscribeMessage = `{"t":"d","d":{"r":${messageId},"a":"q","b":{"p":"${path}","h":""}}}`;
-        const expectedResponse = `{"t":"d","d":{"r":${messageId},"b":{"s":"ok","d":{}}}}`
+        const expectedResponse = { r: messageId, b: { s: 'ok', d: {} } };
         const defer = new Deferred();
         const subscription = new Subscription(
           path,
