@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <script src="https://www.gstatic.com/firebasejs/5.4.1/firebase.js"></script>
   <script>
@@ -9,9 +10,15 @@
       projectId: "web-ar-e1c34",
     });
     firebase.database.enableLogging(true);
-    var db = firebase.database();
+    function writeUserData(userId, name) {
+      firebase.database().ref('users/' + userId).set({
+        username: name
+      });
+    }
   </script>
 </head>
+
 <body>
 </body>
+
 </html>

@@ -53,16 +53,11 @@
     }
 
     class Subscription {
-      constructor(path, cb, unsubscribe, defer) {
+      constructor(path, cb, unsubscribe) {
         this.path = path;
         this.cb = cb;
         this.status = 0;
-
         this._unsubscribe = unsubscribe;
-
-        defer.promise
-          .then(() => this.status = 1)
-          .catch(() => this.status = -1);
       }
 
       unsubscribe() {
@@ -70,12 +65,26 @@
       }
     }
 
+    class PendingSubscription {
+      constructor(messageId, subscription) {
+        this.messageId = messageId;
+        this.subscription = subscription;
+      }
+    }
+
+    class PendingRequest {
+      constructor(messageId, defer) {
+        this.messageId = messageId;
+        this.defer = defer;
+      }
+    }
+
     class ConnectionManager {
       constructor(url) {
         this._messagesQueue = [];
-        this._helloMessage = '{"t":"d","d":{"r":1,"a":"s","b":{"c":{"sdk.js.5-4-1":1}}}}';
+        this._helloMessage = { t: 'd', d: { r: 1, a: 's', b: { c: { 'sdk.js.5-4-1': 1 } } } };
         this._expectedHelloResponse = { t: "d", d: { r: 1, b: { s: "ok", d: "" } } };
-        this._pingMessage = '{"t":"c","d":{"t":"p","d":{}}}';
+        this._pingMessage = { t: 'c', d: { t: 'p', d: {} } };
         this._expectedPongMessage = { t: "c", d: { t: "o", d: null } };
         this._connectionEstablished = false;
         this._messageNumber = 0;
@@ -143,7 +152,7 @@
         clearTimeout(this._pingTimeoutHandler);
         this._pingTimeoutHandler = setTimeout(() => { this._ping(); this._resetPing() }, this._pingPeriod);
       }
-      _ping() { if (this._ws.readyState !== this._ws.OPEN) { this._ws.send(0) } }
+      _ping() { if (this._ws.readyState === this._ws.OPEN) { this._ws.send(0) } }
 
       _handleMessage(data) {
         if (this._messageNumber === 0) { this._messageNumber++; this.send(this._helloMessage) }
@@ -163,14 +172,33 @@
         if (this._ws.readyState !== this._ws.OPEN) {
           this._messagesQueue.push(data);
         }
-        this._ws.send(data);
+        this._ws.send(JSON.stringify(data));
         this._resetPing();
+      }
+
+      listen(path) {
+        const messageId = this._messageNumber++;
+        const request = {
+          t: 'd',
+          d: { r: messageId, a: 'q', b: { p: path, h: '' } },
+        };
+        this.send(request);
+        return messageId;
+      }
+
+      put(path, data) {
+        const messageId = this._messageNumber++;
+        const request = {
+          t: 'd',
+          d: { r: messageId, a: 'p', b: { p: path, d: data } },
+        };
+        this.send(request);
+        return messageId;
       }
     }
 
     class SubscriptionManager {
       constructor(connectionManager) {
-        this._messageId = 0;
         this._subscriptions = [];
         this._pendingSubscriptions = [];
         this._cm = connectionManager;
@@ -209,9 +237,9 @@
         const requestNumber = data.r;
         if (requestNumber) {
           //this is response
-          const subscription = this._pendingSubscriptions.find(i => i.expectedResponse === data);
+          const subscription = this._pendingSubscriptions.find(i => i.messageId === requestNumber);
           if (subscription) {
-            subscription.defer.resolve(subscription.subscription);
+            subscription.subscription.status = 1;
             this._removePendingSubscription(subscription);
             return;
           }
@@ -276,28 +304,76 @@
 
       subscribe(path, cb) {
         path = path.replace(/(^\/+|\/+$ | ^\\+|\\+$)/g, '');
-        const messageId = this._messageId++;
-        const subscribeMessage = `{"t":"d","d":{"r":${messageId},"a":"q","b":{"p":"${path}","h":""}}}`;
-        const expectedResponse = { r: messageId, b: { s: 'ok', d: {} } };
-        const defer = new Deferred();
         const subscription = new Subscription(
           path,
           cb,
-          () => this._subscriptions = this._subscriptions.filter(i => i !== subscription),
+          () => this._subscriptions = this._subscriptions.filter(i => i !== subscription)
+        );
+        this._pendingSubscriptions.push(new PendingSubscription(this._cm.listen(path), subscription));
+        this._subscriptions.push(subscription);
+        return subscription;
+      }
+
+    }
+
+    class CRUDManager {
+      constructor(connectionManager) {
+        this._pendingRequests = [];
+        this._cm = connectionManager;
+        this._dataSubscription = PubSub.subscribe('Message', (ev) => this._onMessage(ev.payload));
+      }
+
+      _removePendingRequest(pendingRequest) {
+        this._pendingRequests = this._pendingRequests.filter(i => i !== pendingRequest);
+      }
+
+      _onMessage(data) {
+        const requestNumber = data.r;
+        if (requestNumber) {
+          //this is response
+          const pendingRequest = this._pendingRequests.find(i => i.messageId === requestNumber);
+          if (pendingRequest) {
+            pendingRequest.defer.resolve();
+            this._removePendingRequest(pendingRequest);
+            return;
+          }
+        }
+      }
+
+      put(path, data) {
+        const defer = new Deferred();
+        const pendingRequest = new PendingRequest(
+          this._cm.put(path, data),
           defer
         );
-        this._subscriptions.push(subscription);
-        this._pendingSubscriptions.push({ messageId, defer, expectedResponse, subscription })
-        this._cm.send(subscribeMessage);
+        this._pendingRequests.push(pendingRequest);
         return defer.promise;
+      }
+
+      remove(path) {
+        const defer = new Deferred();
+        const pendingRequest = new PendingRequest(
+          this._cm.put(path, null),
+          defer
+        );
+        this._pendingRequests.push(pendingRequest);
+        return defer.promise;
+      }
+
+      get(path) {
+        const defer = new Deferred();
+        //listen/unlisten
       }
 
     }
 
     const cm = new ConnectionManager('wss://<db-name>.firebaseio.com/.ws?v=5&ns=<db-name>');
     const sm = new SubscriptionManager(cm);
+    const crudm = new CRUDManager(cm);
 
-
+//TODO: post something top level
+//TODO: post something deep down in tree 
+//TODO: resubscription
 
 
   </script>
